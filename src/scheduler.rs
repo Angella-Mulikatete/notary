@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    analyzer, config::Config, events, git, llm, merge, probe, prompt, report,
+    config::Config, events, git, llm, merge, planner, probe, prompt, report,
     state::{self, Attempt, CostBasis, State, TaskState},
     testrun, verify,
     workers::{claude_code::{self, ClaudeCodeWorker}, patch::PatchWorker, Job, Msg, Worker},
@@ -64,11 +64,8 @@ pub fn run(cfg: &Config, repo: &Path, resume: bool) -> anyhow::Result<()> {
         anyhow::ensure!(st.tasks.values().all(|t| t.attempts.is_empty()),
             "a run already happened here; use `notary resume`, or start from a fresh repo");
         probe::preflight(cfg, repo)?;
-        probe::probe(cfg, repo, &mut st)?;
-        for d in analyzer::analyze(cfg, &state::integration_dir(repo), &st)? {
-            let t = st.tasks.get_mut(&d.task).unwrap();
-            if !t.deps.contains(&d.on) { t.deps.push(d.on.clone()); }
-        }
+        if !st.planned { probe::probe(cfg, repo, &mut st)?; }
+        planner::plan(cfg, repo, &mut st)?;
         st
     };
     let mut ctx = Ctx { cfg, repo: repo.to_path_buf(), nd, sp, st };
@@ -157,17 +154,24 @@ fn pick(ctx: &mut Ctx, slot: usize, workers: &[Arc<dyn Worker>], busy: &[Option<
             t.deps.iter().find(|d| dep_ok(&ctx.st, d).is_none()).map(|d| (id.clone(), d.clone()))
         });
         let Some((id, dep)) = doomed else { break };
+        if ctx.st.tasks[&id].contradicts.as_deref() == Some(dep.as_str()) {
+            let t = ctx.st.tasks.get_mut(&id).unwrap();
+            t.deps.retain(|d| *d != dep);
+            t.contradicts = None;
+            t.notes.push(format!("contradiction winner {dep} did not land, so {id} is tried instead"));
+            ctx.log("contradiction_released", Some(&id), serde_json::json!({ "winner": dep }))?;
+            continue;
+        }
         ctx.set(&id, TaskState::Skipped { reason: format!("depends on {dep}, which is {}", short(&ctx.st.tasks[&dep].state)) })?;
     }
 
     let w = &workers[slot];
-    let max = ctx.cfg.policy.max_attempts as usize;
     let has_claude = workers.iter().any(|w| w.is_claude());
     let running_areas: Vec<String> = busy.iter().flatten().filter_map(|id| ctx.st.tasks[id].area.clone()).collect();
     let eligible: Vec<String> = ctx.st.order.iter().filter(|id| {
         let t = &ctx.st.tasks[*id];
         t.state == TaskState::Pending
-            && t.attempts.len() < max
+            && t.attempts.len() < t.max_attempts(ctx.cfg.policy.max_attempts)
             && t.deps.iter().all(|d| dep_ok(&ctx.st, d) == Some(true))
             && !t.area.as_ref().is_some_and(|a| running_areas.contains(a))
             && t.attempts.last().is_none_or(|a| a.worker != w.name())
@@ -182,13 +186,16 @@ fn pick(ctx: &mut Ctx, slot: usize, workers: &[Arc<dyn Worker>], busy: &[Option<
         }
         v
     } else {
-        eligible.into_iter().filter(|id| {
+        let claude_busy = workers.iter().zip(busy).any(|(w, b)| w.is_claude() && b.is_some());
+        let mut v: Vec<String> = eligible.into_iter().filter(|id| {
             let t = &ctx.st.tasks[id];
             match t.attempts.last() {
-                None => !t.hard || !has_claude,
+                None => !t.hard || !has_claude || claude_busy,
                 Some(a) => a.worker.starts_with("claude-code") || !has_claude,
             }
-        }).collect()
+        }).collect();
+        v.sort_by_key(|id| ctx.st.tasks[id].hard);
+        v
     };
 
     let l = &ctx.st.ledger;
@@ -221,6 +228,16 @@ fn dispatch(ctx: &mut Ctx, slot: usize, worker: &Arc<dyn Worker>, id: &str, amou
         ctx.st.tasks.get_mut(id).unwrap().notes.push(format!("acceptance already passes at {} (runs/{id}/before-a{n}.tap)", &start[..8]));
         ctx.set(id, TaskState::AlreadySatisfied { by: by.clone() })?;
         ctx.log("already_satisfied", Some(id), serde_json::json!({ "by": by, "at": start }))?;
+        let _ = git::worktree_remove(&ctx.repo, &wt);
+        return Ok(false);
+    }
+
+    if let Some(winner) = ctx.st.tasks[id].contradicts.clone() {
+        let names = testrun::failing_names(&fs::read_to_string(&before_tap).unwrap_or_default());
+        let why = ctx.st.tasks[id].contradiction_why.clone().unwrap_or_default();
+        let reason = format!("contradicts {winner}: {why}; failing on top of {winner}: {} (runs/{id}/before-a{n}.tap)", names.join("; "));
+        ctx.st.tasks.get_mut(id).unwrap().notes.push("blocked before any spend; no worker was called".into());
+        ctx.set(id, TaskState::Blocked { reason })?;
         let _ = git::worktree_remove(&ctx.repo, &wt);
         return Ok(false);
     }
@@ -281,10 +298,20 @@ fn handle_done(ctx: &mut Ctx, worker: &str, id: &str, n: u8, result: anyhow::Res
     ctx.log("worker_done", Some(id), serde_json::json!({ "worker": worker, "attempt": n, "summary": summary, "error": error }))?;
 
     if let Some(e) = error { return fail(ctx, id, n, e); }
+    finish_attempt(ctx, id, n)
+}
+
+/// Commit, verify and merge attempt `n`. The task must be Running.
+fn finish_attempt(ctx: &mut Ctx, id: &str, n: u8) -> anyhow::Result<()> {
     let wt = ctx.wt(id, n);
     let title = ctx.st.tasks[id].title.clone();
-    let Some(imp) = git::commit_all(&wt, &format!("{id}: {title} (notary attempt {n})"))? else {
-        return fail(ctx, id, n, "agent changed nothing".into());
+    let imp = match git::commit_all(&wt, &format!("{id}: {title} (notary attempt {n})"))? {
+        Some(sha) => sha,
+        // resume: the commit was made before the crash
+        None => match ctx.st.tasks[id].impl_sha.clone().filter(|s| git::head(&wt).ok().as_ref() == Some(s)) {
+            Some(sha) => sha,
+            None => return fail(ctx, id, n, "agent changed nothing".into()),
+        },
     };
     ctx.st.tasks.get_mut(id).unwrap().impl_sha = Some(imp.clone());
     ctx.set(id, TaskState::Implemented)?;
@@ -303,8 +330,8 @@ fn handle_done(ctx: &mut Ctx, worker: &str, id: &str, n: u8, result: anyhow::Res
 
 /// Records why attempt `n` failed; back to Pending, or Blocked once attempts run out.
 pub fn fail(ctx: &mut Ctx, id: &str, n: u8, reason: String) -> anyhow::Result<()> {
-    let max = ctx.cfg.policy.max_attempts as usize;
     let t = ctx.st.tasks.get_mut(id).unwrap();
+    let max = t.max_attempts(ctx.cfg.policy.max_attempts);
     let worker = t.attempts.last().map(|a| a.worker.clone()).unwrap_or_default();
     if let Some(a) = t.attempts.last_mut() { a.outcome = reason.clone(); }
     t.notes.push(format!("a{n} ({worker}): {reason}"));
@@ -319,39 +346,74 @@ pub fn fail(ctx: &mut Ctx, id: &str, n: u8, reason: String) -> anyhow::Result<()
 }
 
 
+/// Settles leftover reservations in full (money may have been spent), then picks each
+/// in-flight task back up: re-verify work that exists, re-gate cut-off merges, requeue the rest.
 fn recover(ctx: &mut Ctx) -> anyhow::Result<()> {
     let integ = state::integration_dir(&ctx.repo);
     let mut changed = Vec::new();
-    for (res, amount) in std::mem::take(&mut ctx.st.ledger.reserved) {
-        let task = res.split('-').next().unwrap_or(&res).to_string();
-        ctx.st.ledger.settle(&res, &task, amount, "estimated");
+    let reserved = std::mem::take(&mut ctx.st.ledger.reserved);
+    for (res, amount) in &reserved {
+        let task = res.split('-').next().unwrap_or(res).to_string();
+        ctx.st.ledger.settle(res, &task, *amount, "estimated");
         changed.push(format!("settled {res} at ${amount:.3} (estimated)"));
     }
+    git::prune(&ctx.repo)?;
+    let mut reverify = Vec::new();
+    let mut regate = Vec::new();
     for id in ctx.st.order.clone() {
         let state = ctx.st.tasks[&id].state.clone();
-        let n = match &state {
-            TaskState::Running { attempt, .. } => {
-                let t = ctx.st.tasks.get_mut(&id).unwrap();
-                t.attempts.push(Attempt { n: *attempt, worker: "unknown (crashed)".into(), cost_usd: 0.0, basis: CostBasis::Estimated, outcome: "interrupted by crash".into() });
-                *attempt
+        let (n, has_work) = match &state {
+            TaskState::Running { slot, attempt } => {
+                let cost = reserved.get(&format!("{id}-a{attempt}")).copied().unwrap_or(0.0);
+                ctx.st.tasks.get_mut(&id).unwrap().attempts.push(Attempt { n: *attempt, worker: format!("slot {} (interrupted)", slot + 1),
+                    cost_usd: cost, basis: CostBasis::Estimated, outcome: "interrupted by crash".into() });
+                let wt = ctx.wt(&id, *attempt);
+                (*attempt, wt.exists() && !git::is_clean(&wt).unwrap_or(true))
             }
-            TaskState::Implemented | TaskState::Verified => ctx.st.tasks[&id].attempts.len() as u8,
-            TaskState::Merging { prev_integration } => {
-                if git::head(&integ)? != *prev_integration { git::reset_hard(&integ, prev_integration)?; }
-                ctx.st.tasks[&id].attempts.len() as u8
+            TaskState::Implemented | TaskState::Verified | TaskState::Merging { .. } => {
+                let n = ctx.st.tasks[&id].attempts.len() as u8;
+                (n, ctx.wt(&id, n).exists())
             }
             _ => continue,
         };
-        let wt = ctx.wt(&id, n);
-        if wt.exists() && git::worktree_remove(&ctx.repo, &wt).is_err() { let _ = fs::remove_dir_all(&wt); }
+        if let TaskState::Merging { prev_integration } = &state {
+            if git::head(&integ)? != *prev_integration { git::reset_hard(&integ, prev_integration)?; }
+        }
         let t = ctx.st.tasks.get_mut(&id).unwrap();
-        t.notes.push(format!("a{n} interrupted in {state:?}; requeued by resume"));
-        t.state = TaskState::Pending; // recovery is the one place allowed to reset in-flight work
-        changed.push(format!("{id}: {state:?} -> Pending"));
+        // recovery is the one place allowed to set a state directly
+        let what = if !has_work {
+            t.state = TaskState::Pending;
+            "requeued"
+        } else if matches!(state, TaskState::Merging { .. }) {
+            t.state = TaskState::Verified;
+            regate.push((id.clone(), n));
+            "merge gate rerun"
+        } else {
+            t.state = TaskState::Running { slot: 0, attempt: n };
+            reverify.push((id.clone(), n));
+            "verified again"
+        };
+        t.notes.push(format!("a{n} interrupted in {state:?}; {what} by resume"));
+        if !has_work {
+            let wt = ctx.wt(&id, n);
+            if wt.exists() && git::worktree_remove(&ctx.repo, &wt).is_err() { let _ = fs::remove_dir_all(&wt); }
+        }
+        changed.push(format!("{id}: {state:?} -> {what}"));
     }
-    git::prune(&ctx.repo)?;
     ctx.log("crash_recovered", None, serde_json::json!({ "changes": changed }))?;
     for c in &changed { println!("resume: {c}"); }
+    for (id, n) in reverify {
+        if let Err(e) = finish_attempt(ctx, &id, n) {
+            if !ctx.st.tasks[&id].state.is_terminal() { ctx.set(&id, TaskState::Blocked { reason: format!("harness error on resume: {e:#}") })?; }
+        }
+        println!("resume: {id} -> {}", short(&ctx.st.tasks[&id].state));
+    }
+    for (id, n) in regate {
+        if let Err(e) = merge::gate(ctx, &id, n) {
+            if !ctx.st.tasks[&id].state.is_terminal() { ctx.set(&id, TaskState::Blocked { reason: format!("harness error on resume: {e:#}") })?; }
+        }
+        println!("resume: {id} -> {}", short(&ctx.st.tasks[&id].state));
+    }
     Ok(())
 }
 
@@ -361,7 +423,7 @@ fn finalize(ctx: &mut Ctx, started: Instant, out_of_budget: bool) -> anyhow::Res
         let t = &ctx.st.tasks[&id];
         if t.state != TaskState::Pending { continue; }
         let waiting = t.deps.iter().find(|d| dep_ok(&ctx.st, d) != Some(true)).cloned();
-        let reason = if t.attempts.len() >= max { "no attempts left".to_string() }
+        let reason = if t.attempts.len() >= t.max_attempts(max as u8) { "no attempts left".to_string() }
             else if out_of_budget { "budget cap reached".to_string() }
             else if let Some(d) = waiting { format!("waiting on {d}, which never merged") }
             else if ctx.st.ledger.available_for(&id) < PATCH_MIN_USD { "per-task budget ceiling reached".to_string() }
@@ -399,8 +461,11 @@ fn finalize(ctx: &mut Ctx, started: Instant, out_of_budget: bool) -> anyhow::Res
             let _ = git::worktree_remove(&ctx.repo, &e.path());
         }
     }
+    ctx.st.elapsed_secs += started.elapsed().as_secs();
+    ctx.st.save(&ctx.sp)?;
+    report::write(ctx.cfg, &ctx.st, &ctx.nd, &discrepancies)?;
     let report = serde_json::json!({
-        "elapsed_secs": started.elapsed().as_secs(),
+        "elapsed_secs": ctx.st.elapsed_secs,
         "ledger": ctx.st.ledger.clone(),
         "collisions": serde_json::to_value(&ctx.st.collisions)?,
         "tasks": ctx.st.order.iter().map(|id| serde_json::to_value(&ctx.st.tasks[id])).collect::<Result<Vec<_>, _>>()?,

@@ -28,23 +28,30 @@ pub fn chat(p: &Provider, prices: &BTreeMap<String, Price>,
         body["usage"] = serde_json::json!({ "include": true }); // OpenRouter: put cost in usage
     }
     let url = format!("{}/chat/completions", p.base_url);
-    let mut retried = false;
+    // Gemini's 503 "high demand" spikes last tens of seconds; one 5s retry lost T01 in the first practice run
+    const BACKOFF_SECS: [u64; 3] = [5, 15, 30];
+    let mut tries = 0;
     let resp: serde_json::Value = loop {
         let r = ureq::post(&url)
             .set("Authorization", &format!("Bearer {}", p.key))   // header, never the URL
             .timeout(Duration::from_secs(timeout_secs))
             .send_json(body.clone());
+        let wait = BACKOFF_SECS.get(tries).copied();
+        tries += 1;
         match r {
             Ok(resp) => break resp.into_json()?,
             Err(ureq::Error::Status(code, resp)) => {
                 let text = resp.into_string().unwrap_or_default();
-                if (code == 429 || code >= 500) && !retried {
-                    eprintln!("llm: {model} returned {code}; retrying once in 5s");
-                    retried = true;
-                    std::thread::sleep(Duration::from_secs(5));
+                if let (true, Some(w)) = (code == 429 || code >= 500, wait) {
+                    eprintln!("llm: {model} returned {code}; retry {tries} in {w}s");
+                    std::thread::sleep(Duration::from_secs(w));
                     continue;
                 }
                 anyhow::bail!("llm: {model} returned {code}: {}", text.chars().take(400).collect::<String>());
+            }
+            Err(e) if tries == 1 => {
+                eprintln!("llm: {model} request failed ({e}); retrying once in 5s");
+                std::thread::sleep(Duration::from_secs(5));
             }
             Err(e) => anyhow::bail!("llm: {model} request failed: {e}"),
         }

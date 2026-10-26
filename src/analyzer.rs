@@ -1,19 +1,18 @@
 use regex::Regex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 
 use crate::{config::Config, state::State};
 
-#[derive(Serialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Dep { pub task: String, pub on: String, pub why: String, pub source: String }
 
-/// "/transfers/${sent.id}/reverse?x=1" and "/transfers/:id/reverse" -> segments with :p
 pub fn normalize(path: &str) -> String {
     let path = path.split('?').next().unwrap_or(path);
     Regex::new(r"\$\{[^}]*\}|:[A-Za-z_]+").unwrap().replace_all(path, ":p").trim_end_matches('/').to_string()
 }
 
-/// A pattern segment ":p" matches any segment of a concrete path.
+
 pub fn route_matches(pattern: &str, path: &str) -> bool {
     let (a, b): (Vec<&str>, Vec<&str>) = (pattern.split('/').collect(), path.split('/').collect());
     a.len() == b.len() && a.iter().zip(&b).all(|(p, s)| *p == ":p" || *s == ":p" || p == s)

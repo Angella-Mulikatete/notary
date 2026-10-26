@@ -55,11 +55,17 @@ pub struct Task {
     pub hard: bool,
     pub state: TaskState,
     pub attempts: Vec<Attempt>,
-    pub start_sha: Option<String>,   // integration tip the attempt started from (before-proof)
-    pub impl_sha: Option<String>,    // the agent's commit (after-proof)
+    pub start_sha: Option<String>,   
+    pub impl_sha: Option<String>,    
     pub merged_sha: Option<String>,
-    pub confidence: Option<String>,  // "local", "local+shadow", "local; 2 shadow failing"
-    pub notes: Vec<String>,          // reasons and evidence lines for the report
+    pub confidence: Option<String>, 
+    pub notes: Vec<String>,         
+    #[serde(default)]
+    pub contradicts: Option<String>,
+    #[serde(default)]
+    pub contradiction_why: Option<String>,
+    #[serde(default)]
+    pub bonus_attempts: u8,          // granted when a merge collision, not the agent, sank an attempt
 }
 
 impl Task {
@@ -68,9 +74,11 @@ impl Task {
             id: id.to_string(), title: title.to_string(), body: body.to_string(),
             deps: Vec::new(), area: None, hard: false, state: TaskState::Pending,
             attempts: Vec::new(), start_sha: None, impl_sha: None, merged_sha: None,
-            confidence: None, notes: Vec::new(),
+            confidence: None, notes: Vec::new(), contradicts: None, contradiction_why: None, bonus_attempts: 0,
         }
     }
+
+    pub fn max_attempts(&self, base: u8) -> usize { (base + self.bonus_attempts) as usize }
 
     pub fn transition(&mut self, to: TaskState) -> anyhow::Result<()> {
         use TaskState::*;
@@ -93,13 +101,24 @@ impl Task {
 pub struct State {
     pub base_sha: String,
     #[serde(default)]
-    pub order: Vec<String>,          // backlog order; BTreeMap sorts by id
+    pub order: Vec<String>,         
     #[serde(default)]
     pub last_merged: Option<String>,
+    #[serde(default)]
+    pub planned: bool,
+    #[serde(default)]
+    pub dep_edges: Vec<crate::analyzer::Dep>,
+    #[serde(default)]
+    pub contradictions: Vec<Contradiction>,
+    #[serde(default)]
+    pub elapsed_secs: u64,
     pub tasks: BTreeMap<String, Task>,
     pub ledger: crate::budget::Ledger,
     pub collisions: Collisions,
 }
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Contradiction { pub a: String, pub b: String, pub why: String, pub keep: Option<String>, pub decided_by: String }
 
 #[derive(Serialize, Deserialize, Default)]
 pub struct Collisions { pub rebase_conflicts: u32, pub repairs_ok: u32, pub reverts: u32, pub wasted_attempts: u32 }
@@ -155,7 +174,7 @@ mod tests {
         let mut s = State { base_sha: "abc".into(), ..Default::default() };
         s.tasks.insert("T01".into(), Task::new("T01", "t", "b"));
         s.save(&path).unwrap();
-        s.save(&path).unwrap(); // rename over an existing file must work on Windows too
+        s.save(&path).unwrap();
         let back = State::load(&path).unwrap();
         assert_eq!(back.base_sha, "abc");
         assert_eq!(back.tasks["T01"].state, Pending);

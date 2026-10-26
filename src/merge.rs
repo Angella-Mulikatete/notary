@@ -74,7 +74,22 @@ pub fn gate(ctx: &mut Ctx, id: &str, n: u8) -> anyhow::Result<()> {
     git::reset_hard(&integ, &prev)?;
     ctx.st.collisions.reverts += 1;
     ctx.log("reverted", Some(id), serde_json::json!({ "to": prev, "problems": problems, "broke": contradicts }))?;
-    if let Some((other, names)) = contradicts.first() {
+    // A task that merged after this attempt started was never visible to the agent; breaking it
+    // is a merge collision (usually a lossy conflict repair), not a contradiction. Requeue from the tip.
+    let start = ctx.st.tasks[id].start_sha.clone().unwrap_or_default();
+    let (stale, seen): (Vec<_>, Vec<_>) = contradicts.iter().partition(|(other, _)| {
+        ctx.st.tasks[other].merged_sha.as_ref().is_some_and(|m| !git::is_ancestor(&integ, m, &start).unwrap_or(false))
+    });
+    if seen.is_empty() && !stale.is_empty() {
+        ctx.st.collisions.wasted_attempts += 1;
+        let broke = stale.iter().map(|(o, names)| format!("{o} ({})", names.join("; "))).collect::<Vec<_>>().join(", ");
+        let t = ctx.st.tasks.get_mut(id).unwrap();
+        if t.bonus_attempts == 0 { t.bonus_attempts = 1; }
+        ctx.log("collision", Some(id), serde_json::json!({ "broke": broke, "bonus_attempt": true }))?;
+        return back_to_pending(ctx, id, n, format!("merge collision: broke {broke}, which merged after this attempt started; \
+            retrying from the current tip, where that code is visible. Keep its behaviour"));
+    }
+    if let Some((other, names)) = seen.first() {
         let reason = format!("contradicts {other}: merging it breaks {other}'s acceptance ({})", names.join("; "));
         ctx.st.tasks.get_mut(id).unwrap().attempts.last_mut().map(|a| a.outcome = reason.clone());
         remove_tree(ctx, id, n);
@@ -132,7 +147,9 @@ fn repair(ctx: &mut Ctx, id: &str, n: u8, files: &[String]) -> anyhow::Result<bo
     let mut ok = true;
     for f in files {
         let text = fs::read_to_string(wt.join(f))?;
-        let user = format!("Two changes to this file conflict during a git rebase. Resolve it keeping BOTH changes.\n\n{tickets}\n\n=== FILE: {f} ===\n{text}\n=== END FILE ===\n\nReturn the whole resolved file in the same === FILE: ... === / === END FILE === format, with no conflict markers.");
+        let user = format!("Two changes to this file conflict during a git rebase. Resolve it keeping BOTH changes.\n\
+The part between <<<<<<< and ======= is code ALREADY MERGED by other tickets: keep every rule and special case in it. \
+The part between ======= and >>>>>>> is the change for ticket {id}: add it on top, without dropping anything already merged.\n\n{tickets}\n\n=== FILE: {f} ===\n{text}\n=== END FILE ===\n\nReturn the whole resolved file in the same === FILE: ... === / === END FILE === format, with no conflict markers.");
         let reply = llm::chat(&provider, &ctx.cfg.prices, &slot.model, "You resolve git merge conflicts precisely.", &user, 180);
         let reply = match reply { Ok(r) => r, Err(e) => { eprintln!("repair {id} {f}: {e:#}"); ok = false; break; } };
         spent += reply.cost_usd;

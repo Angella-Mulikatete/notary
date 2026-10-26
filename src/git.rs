@@ -22,6 +22,10 @@ pub fn worktree_add(repo: &Path, path: &Path, branch: &str, base: &str) -> anyho
     git(repo, &["worktree", "add", "-B", branch, &path.to_string_lossy(), base]).map(|_| ())
 }
 
+pub fn worktree_add_detached(repo: &Path, path: &Path, sha: &str) -> anyhow::Result<()> {
+    git(repo, &["worktree", "add", "--detach", "-f", &path.to_string_lossy(), sha]).map(|_| ())
+}
+
 pub fn prune(repo: &Path) -> anyhow::Result<()> { git(repo, &["worktree", "prune"]).map(|_| ()) }
 
 pub fn worktree_remove(repo: &Path, path: &Path) -> anyhow::Result<()> {
