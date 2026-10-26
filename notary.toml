@@ -1,0 +1,64 @@
+[repo]
+backlog        = "backlog/backlog.json"
+test_all       = "npm test"
+test_task      = "node --test --test-reporter=tap acceptance/{id}.test.js"
+integrity      = "npm run verify:tests"
+grade          = "npm run grade"
+grade_report   = "grade-report.json"
+routes_file    = "src/api/routes.js"
+writable       = ["src/**", "docs/**"]
+locked         = ["test/**", "acceptance/**", "scripts/**", "backlog/**", "tests.lock.json", "package.json"]
+context_files  = ["AGENTS.md", "docs/*.md", "src/**/*.js"]
+
+[budget]
+run_cap_usd      = 2.00
+task_ceiling_usd = 0.50
+
+[policy]
+contradiction     = "ask"     # ask | first
+ask_timeout_secs  = 60
+max_attempts      = 2
+fast_forward_main = true
+shadow_tests      = false     # turn on in Phase 3 if time allows
+timeout_secs      = 600
+
+[providers.gemini]
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+key_env  = "GEMINI_FREE_API_KEY"   # free-tier key for practice; GEMINI_API_KEY is the paid one
+cost     = "computed"
+
+[providers.openrouter]
+base_url = "https://openrouter.ai/api/v1"
+key_env  = "OPENROUTER_KEY_SLOT2"
+cost     = "reported"
+
+[providers.ollama]
+base_url = "https://ollama.com/v1"
+key_env  = "OLLAMA_API_KEY"
+cost     = "computed"
+
+# USD per 1M tokens at paid list prices, so logged cost reflects real spend even on free tiers
+# (ai.google.dev/gemini-api/docs/pricing, openrouter.ai/models; checked 2026-10-26)
+[prices]
+"gemini-3.1-flash-lite"      = { input = 0.25, output = 1.50 }
+"gemini-3.6-flash"           = { input = 0.75, output = 3.75 }   # 3.8-flash gave 503 / hung on 2026-10-26
+"deepseek/deepseek-v4-flash" = { input = 0.09, output = 0.18 }
+"gpt-oss:120b"               = { input = 0.15, output = 0.60 }   # openai/gpt-oss-120b on OpenRouter; $0 on Ollama free plan
+
+[planner]
+provider = "gemini"
+model    = "gemini-3.6-flash"
+
+[[slots]]
+kind = "patch"
+provider = "gemini"
+model = "gemini-3.1-flash-lite"
+
+[[slots]]
+kind = "patch"
+provider = "ollama"
+model = "gpt-oss:120b"
+
+[[slots]]
+kind = "claude-code"
+model = "sonnet"
