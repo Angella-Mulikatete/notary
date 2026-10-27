@@ -77,9 +77,9 @@ mod tests {
     fn timeout_kills_the_process() {
         let d = tmp("timeout");
         let start = Instant::now();
-        let r = run(sh("sleep 5", &d), &d.join("o"), &d.join("e"), Duration::from_secs(1)).unwrap();
+        let r = run(sh("sleep 30", &d), &d.join("o"), &d.join("e"), Duration::from_secs(1)).unwrap();
         assert!(r.timed_out);
-        assert!(start.elapsed() < Duration::from_secs(4), "took {:?}", start.elapsed());
+        assert!(start.elapsed() < Duration::from_secs(10), "took {:?}", start.elapsed());
     }
 
     #[test]

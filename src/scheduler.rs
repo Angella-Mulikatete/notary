@@ -348,7 +348,14 @@ pub fn fail(ctx: &mut Ctx, id: &str, n: u8, reason: String) -> anyhow::Result<()
     let wt = ctx.wt(id, n);
     if wt.exists() && git::worktree_remove(&ctx.repo, &wt).is_err() { let _ = fs::remove_dir_all(&wt); }
     if used >= max {
-        ctx.set(id, TaskState::Blocked { reason: format!("failed after {used} attempts: {reason}") })
+        // every attempt broke the same task's tests: say so plainly, the planner missed a contradiction
+        let broke = |o: &str| o.strip_prefix("broke ").and_then(|r| r.split('\'').next()).map(str::to_string);
+        let victims: Vec<Option<String>> = ctx.st.tasks[id].attempts.iter().map(|a| broke(&a.outcome)).collect();
+        let suspect = match victims.first() {
+            Some(Some(v)) if victims.iter().all(|x| x.as_ref() == Some(v)) => format!(" (possible contradiction with {v})"),
+            _ => String::new(),
+        };
+        ctx.set(id, TaskState::Blocked { reason: format!("failed after {used} attempts{suspect}: {reason}") })
     } else {
         ctx.set(id, TaskState::Pending)
     }
