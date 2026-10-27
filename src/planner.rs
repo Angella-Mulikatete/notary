@@ -74,7 +74,10 @@ fn parse_plan(text: &str) -> anyhow::Result<PlanOut> {
 /// One planner call (plus one retry on a parse error). None if it fails; the analyzer's deps still stand.
 fn call_planner(cfg: &Config, repo: &Path, st: &mut State) -> anyhow::Result<Option<PlanOut>> {
     let nd = state::notary_dir(repo);
-    let provider = llm::provider(cfg, &cfg.planner.provider)?;
+    let mut models = vec![(cfg.planner.provider.clone(), cfg.planner.model.clone())];
+    if let (Some(p), Some(m)) = (&cfg.planner.fallback_provider, &cfg.planner.fallback_model) {
+        models.push((p.clone(), m.clone()));
+    }
     let amount = st.ledger.available_for(PLAN_BUDGET_ID).min(PLAN_USD);
     if amount <= 0.0 || st.ledger.reserve(PLAN_BUDGET_ID, PLAN_BUDGET_ID, amount).is_err() {
         events::log(&nd, "budget_refused", None, serde_json::json!({ "for": "planner" }))?;
@@ -83,22 +86,35 @@ fn call_planner(cfg: &Config, repo: &Path, st: &mut State) -> anyhow::Result<Opt
     let user = planner_prompt(&state::integration_dir(repo), st);
     fs::write(nd.join("planner-prompt.md"), &user)?;
     let mut spent = 0.0;
-    let mut basis = provider.basis;
+    let mut basis = crate::state::CostBasis::Computed;
     let mut result = None;
-    let mut ask = user.clone();
-    for round in 1..=2 {
-        let reply = match llm::chat(&provider, &cfg.prices, &cfg.planner.model, SYSTEM, &ask, 240) {
-            Ok(r) => r,
-            Err(e) => { eprintln!("planner: {e:#}"); events::log(&nd, "plan", None, serde_json::json!({ "error": format!("{e:#}") }))?; break; }
-        };
-        spent += reply.cost_usd;
-        basis = reply.basis;
-        fs::write(nd.join(format!("planner-response-{round}.txt")), &reply.text)?;
-        match parse_plan(&reply.text) {
-            Ok(p) => { result = Some(p); break; }
-            Err(e) => {
-                eprintln!("planner: reply {round} did not parse: {e}");
-                ask = format!("{user}\n\nYour previous reply could not be parsed ({e}). Reply with the JSON object only.");
+    // an unreachable model falls through to the fallback; an unparseable reply gets one retry
+    'models: for (pname, model) in &models {
+        let provider = llm::provider(cfg, pname)?;
+        let mut ask = user.clone();
+        for round in 1..=2 {
+            if spent >= amount { break 'models; }
+            let reply = match llm::chat(&provider, &cfg.prices, model, SYSTEM, &ask, 240) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("planner: {pname}/{model}: {e:#}");
+                    events::log(&nd, "plan", None, serde_json::json!({ "model": model, "error": format!("{e:#}") }))?;
+                    continue 'models;
+                }
+            };
+            spent += reply.cost_usd;
+            basis = reply.basis;
+            fs::write(nd.join(format!("planner-response-{round}.txt")), &reply.text)?;
+            match parse_plan(&reply.text) {
+                Ok(p) => {
+                    println!("plan: planner {pname}/{model}");
+                    result = Some(p);
+                    break 'models;
+                }
+                Err(e) => {
+                    eprintln!("planner: {model} reply {round} did not parse: {e}");
+                    ask = format!("{user}\n\nYour previous reply could not be parsed ({e}). Reply with the JSON object only.");
+                }
             }
         }
     }
@@ -219,7 +235,7 @@ pub fn plan(cfg: &Config, repo: &Path, st: &mut State) -> anyhow::Result<()> {
 
 pub fn plan_cmd(cfg: &Config, repo: &Path) -> anyhow::Result<()> {
     let mut st = probe::ensure_init(cfg, repo)?;
-    if !st.planned { probe::probe(cfg, repo, &mut st)?; }
+    if !st.planned { probe::probe(cfg, repo, &mut st, false)?; }
     plan(cfg, repo, &mut st)
 }
 

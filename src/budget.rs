@@ -8,14 +8,17 @@ pub struct Ledger {
     pub spent_usd: f64,
     pub reserved: BTreeMap<String, f64>, 
     pub per_task: BTreeMap<String, f64>,
-    pub by_basis: BTreeMap<String, f64>,  
+    pub by_basis: BTreeMap<String, f64>,
+    #[serde(default)]
+    pub crash_estimates: BTreeMap<String, f64>,  // part of per_task settled in full by resume
 }
 
 impl Ledger {
     pub fn available_for(&self, task: &str) -> f64 {
         let reserved: f64 = self.reserved.values().sum();
         let run_left = self.cap_usd - self.spent_usd - reserved;
-        let task_left = self.task_ceiling_usd - self.per_task.get(task).copied().unwrap_or(0.0);
+        let charged = self.per_task.get(task).copied().unwrap_or(0.0) - self.crash_estimates.get(task).copied().unwrap_or(0.0);
+        let task_left = self.task_ceiling_usd - charged;
         run_left.min(task_left).max(0.0)
     }
     /// Sets aside `amount` or refuses. The scheduler calls this before dispatching.
@@ -30,6 +33,12 @@ impl Ledger {
         self.spent_usd += actual;
         *self.per_task.entry(task.to_string()).or_default() += actual;
         *self.by_basis.entry(basis.to_string()).or_default() += actual;
+    }
+    /// Resume: an interrupted reservation is charged in full to the run (money may have been spent)
+    /// but not to the task's ceiling, so the task still gets its retry.
+    pub fn settle_crashed(&mut self, res_id: &str, task: &str, amount: f64) {
+        self.settle(res_id, task, amount, "estimated");
+        *self.crash_estimates.entry(task.to_string()).or_default() += amount;
     }
 }
 
@@ -58,6 +67,16 @@ mod tests {
         assert!((l.available_for("T02") - 0.75).abs() < 1e-9);
         assert!((l.spent_usd - 0.25).abs() < 1e-9);
         assert!((l.by_basis["computed"] - 0.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn crash_estimate_counts_for_the_run_but_not_the_task_ceiling() {
+        let mut l = ledger(2.0, 0.5);
+        l.reserve("T02-a1", "T02", 0.5).unwrap();
+        l.settle_crashed("T02-a1", "T02", 0.5);
+        assert!((l.spent_usd - 0.5).abs() < 1e-9);
+        assert!((l.available_for("T02") - 0.5).abs() < 1e-9);
+        assert!((l.available_for("T03") - 0.5).abs() < 1e-9);
     }
 
     #[test]

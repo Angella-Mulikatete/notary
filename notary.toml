@@ -46,8 +46,10 @@ cost     = "computed"
 "gpt-oss:120b"               = { input = 0.15, output = 0.60 }   # openai/gpt-oss-120b on OpenRouter; $0 on Ollama free plan
 
 [planner]
-provider = "ollama"            # gemini-3.6-flash kept returning 503 on 2026-10-26
-model    = "gpt-oss:120b"
+provider          = "ollama"            # gemini-3.6-flash kept returning 503 on 2026-10-26
+model             = "gpt-oss:120b"
+fallback_provider = "gemini"
+fallback_model    = "gemini-3.6-flash"
 
 [[slots]]
 kind = "patch"

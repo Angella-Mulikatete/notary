@@ -61,6 +61,10 @@ pub struct Price {
 pub struct ModelRef {
     pub provider: String,
     pub model: String,
+    #[serde(default)]
+    pub fallback_provider: Option<String>,
+    #[serde(default)]
+    pub fallback_model: Option<String>,
 }
 
 #[derive(Deserialize, Clone, Debug)]

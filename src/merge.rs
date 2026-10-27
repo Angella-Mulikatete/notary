@@ -89,11 +89,11 @@ pub fn gate(ctx: &mut Ctx, id: &str, n: u8) -> anyhow::Result<()> {
         return back_to_pending(ctx, id, n, format!("merge collision: broke {broke}, which merged after this attempt started; \
             retrying from the current tip, where that code is visible. Keep its behaviour"));
     }
+    // Seen and still broken: usually agent error, so retry with feedback. Planned contradictions never
+    // get here (the loser is blocked at dispatch); if retries run out the reason names the suspect.
     if let Some((other, names)) = seen.first() {
-        let reason = format!("contradicts {other}: merging it breaks {other}'s acceptance ({})", names.join("; "));
-        ctx.st.tasks.get_mut(id).unwrap().attempts.last_mut().map(|a| a.outcome = reason.clone());
-        remove_tree(ctx, id, n);
-        return ctx.set(id, TaskState::Blocked { reason });
+        return back_to_pending(ctx, id, n, format!("broke {other}'s acceptance at the merge gate ({}); possible contradiction with {other}",
+            names.join("; ")));
     }
     back_to_pending(ctx, id, n, format!("merge gate red: {}", problems.join(", ")))
 }

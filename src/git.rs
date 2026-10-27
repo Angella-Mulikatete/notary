@@ -26,6 +26,11 @@ pub fn worktree_add_detached(repo: &Path, path: &Path, sha: &str) -> anyhow::Res
     git(repo, &["worktree", "add", "--detach", "-f", &path.to_string_lossy(), sha]).map(|_| ())
 }
 
+/// Keeps stray edits recoverable (git stash list) instead of deleting them.
+pub fn stash_all(dir: &Path, msg: &str) -> anyhow::Result<()> {
+    git(dir, &["stash", "push", "-u", "-m", msg]).map(|_| ())
+}
+
 pub fn prune(repo: &Path) -> anyhow::Result<()> { git(repo, &["worktree", "prune"]).map(|_| ()) }
 
 pub fn worktree_remove(repo: &Path, path: &Path) -> anyhow::Result<()> {

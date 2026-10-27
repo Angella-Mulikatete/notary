@@ -3,10 +3,18 @@ use std::{fs, path::PathBuf, process::Command, time::Duration};
 use super::{Job, Outcome, Worker};
 use crate::{proc, state::CostBasis};
 
-const SYSTEM: &str = "You are a coding agent working in a git worktree of a small Node.js project. \
+/// The default system prompt (which states the working directory) is replaced to save ~$0.18 a call,
+/// so the directory must be stated here: without it Claude once edited the main checkout instead.
+fn system_prompt(worktree: &std::path::Path) -> String {
+    let win = worktree.display().to_string();
+    let posix = win.replace('\\', "/");
+    format!("You are a coding agent working in a git worktree of a small Node.js project. \
+Your working directory is {win} (in Bash: {posix}). Read and edit files ONLY under that directory; \
+use absolute paths that start with it. Never touch any other copy of the repository. \
 Complete the task in the user message by editing files directly. Never run git. \
 Never edit test/, acceptance/, scripts/, backlog/, package.json or tests.lock.json. \
-When done, reply with one line saying what you changed.";
+When done, reply with one line saying what you changed.")
+}
 
 pub const MIN_USD: f64 = 0.10;
 
@@ -36,6 +44,7 @@ impl Worker for ClaudeCodeWorker {
         let budget = (job.max_usd * 0.8).max(0.05); // headroom: the CLI can overshoot its cap
         let input = job.run_dir.join(format!("claude-a{}.prompt.md", job.attempt));
         fs::write(&input, &job.prompt)?;
+        let system = system_prompt(&job.worktree);
         let mut cmd = Command::new(&self.exe);
         cmd.current_dir(&job.worktree).args([
             "-p",
@@ -43,7 +52,7 @@ impl Worker for ClaudeCodeWorker {
             "--output-format", "json",
             "--max-budget-usd", &format!("{budget:.2}"),
             "--max-turns", "30",
-            "--system-prompt", SYSTEM,
+            "--system-prompt", &system,
             "--setting-sources", "project",
             "--strict-mcp-config",
             "--disable-slash-commands",

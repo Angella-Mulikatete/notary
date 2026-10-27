@@ -31,6 +31,22 @@ pub fn verify(ctx: &Ctx, id: &str, n: u8, wt: &Path, start: &str, imp: &str) -> 
             after.failed, after.tests, if names.is_empty() { String::new() } else { format!(": {}", names.join("; ")) })));
     }
 
+    // other tasks' locked tests: a whole-file rewrite once turned /^\d+$/ into /^\\d+$/ and broke T08
+    // only tasks already in this attempt's start commit; later merges are checked by the gate after rebase
+    let merged: Vec<&String> = ctx.st.order.iter().filter(|t| {
+        let o = &ctx.st.tasks[*t];
+        o.state == crate::state::TaskState::Merged
+            && o.merged_sha.as_ref().is_some_and(|m| git::is_ancestor(wt, m, start).unwrap_or(false))
+    }).collect();
+    for m in merged {
+        let tap = rd.join(format!("broke-a{n}.tap"));
+        if !testrun::task(cfg, wt, m, &tap)?.passed {
+            let names = testrun::failing_names(&fs::read_to_string(&tap).unwrap_or_default());
+            return Ok(Err(format!("broke {m}'s acceptance ({}); keep {m}'s behaviour (runs/{id}/broke-a{n}.tap)", names.join("; "))));
+        }
+        let _ = fs::remove_file(&tap);
+    }
+
     if !testrun::regression(cfg, wt, &rd.join(format!("regression-a{n}.log")))? {
         return Ok(Err(format!("regression suite red (runs/{id}/regression-a{n}.log)")));
     }

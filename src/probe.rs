@@ -71,6 +71,7 @@ pub fn preflight(cfg: &Config, repo: &Path) -> anyhow::Result<()> {
     anyhow::ensure!(cfg.budget.run_cap_usd > 0.0 && cfg.budget.task_ceiling_usd > 0.0, "preflight: budget cap must be > 0");
     let mut providers: Vec<&str> = cfg.slots.iter().filter_map(|s| s.provider.as_deref()).collect();
     providers.push(&cfg.planner.provider);
+    if let Some(p) = &cfg.planner.fallback_provider { providers.push(p); }
     for p in providers {
         let pc = cfg.providers.get(p).ok_or_else(|| anyhow::anyhow!("preflight: unknown provider {p}"))?;
         anyhow::ensure!(std::env::var(&pc.key_env).is_ok_and(|k| !k.is_empty()),
@@ -81,7 +82,8 @@ pub fn preflight(cfg: &Config, repo: &Path) -> anyhow::Result<()> {
 }
 
 /// Runs every Pending task's acceptance test in the integration worktree (at base_sha).
-pub fn probe(cfg: &Config, repo: &Path, st: &mut State) -> anyhow::Result<()> {
+/// `force: false` skips tasks that already have a probe.tap (plan and run after a manual probe).
+pub fn probe(cfg: &Config, repo: &Path, st: &mut State, force: bool) -> anyhow::Result<()> {
     let integ = state::integration_dir(repo);
     let nd = state::notary_dir(repo);
     let sp = state::state_path(repo);
@@ -91,6 +93,7 @@ pub fn probe(cfg: &Config, repo: &Path, st: &mut State) -> anyhow::Result<()> {
     for id in st.order.clone() {
         if st.tasks[&id].state != TaskState::Pending { continue; }
         let out = state::run_dir(repo, &id)?.join("probe.tap");
+        if !force && out.exists() { continue; }
         let r = testrun::task(cfg, &integ, &id, &out)?;
         let label = if r.passed { "pass" } else if r.timed_out { "TIMEOUT" } else { "FAIL" };
         println!("{id:<6} {label} ({} tests, {} failed)", r.tests, r.failed);
@@ -109,5 +112,5 @@ pub fn probe(cfg: &Config, repo: &Path, st: &mut State) -> anyhow::Result<()> {
 
 pub fn probe_cmd(cfg: &Config, repo: &Path) -> anyhow::Result<()> {
     let mut st = ensure_init(cfg, repo)?;
-    probe(cfg, repo, &mut st)
+    probe(cfg, repo, &mut st, true)
 }

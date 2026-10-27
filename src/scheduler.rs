@@ -64,7 +64,7 @@ pub fn run(cfg: &Config, repo: &Path, resume: bool) -> anyhow::Result<()> {
         anyhow::ensure!(st.tasks.values().all(|t| t.attempts.is_empty()),
             "a run already happened here; use `notary resume`, or start from a fresh repo");
         probe::preflight(cfg, repo)?;
-        if !st.planned { probe::probe(cfg, repo, &mut st)?; }
+        if !st.planned { probe::probe(cfg, repo, &mut st, false)?; }
         planner::plan(cfg, repo, &mut st)?;
         st
     };
@@ -187,11 +187,14 @@ fn pick(ctx: &mut Ctx, slot: usize, workers: &[Arc<dyn Worker>], busy: &[Option<
         v
     } else {
         let claude_busy = workers.iter().zip(busy).any(|(w, b)| w.is_claude() && b.is_some());
+        let l = &ctx.st.ledger;
+        let claude_unaffordable = l.cap_usd - l.spent_usd - l.reserved.values().sum::<f64>() < claude_code::MIN_USD;
         let mut v: Vec<String> = eligible.into_iter().filter(|id| {
             let t = &ctx.st.tasks[id];
             match t.attempts.last() {
-                None => !t.hard || !has_claude || claude_busy,
-                Some(a) => a.worker.starts_with("claude-code") || !has_claude,
+                None => !t.hard || !has_claude || claude_busy || claude_unaffordable,
+                // retries prefer Claude Code, but another patch model may take one rather than leave it idle
+                Some(a) => a.worker.starts_with("claude-code") || !has_claude || claude_busy || claude_unaffordable,
             }
         }).collect();
         v.sort_by_key(|id| ctx.st.tasks[id].hard);
@@ -277,7 +280,7 @@ fn retry_feedback(ctx: &Ctx, id: &str, prev: u8) -> String {
     let t = &ctx.st.tasks[id];
     let reason = t.attempts.last().map(|a| format!("Attempt {prev} by {} failed: {}", a.worker, a.outcome)).unwrap_or_default();
     let rd = ctx.nd.join("runs").join(id);
-    let tap = [format!("after-a{prev}.tap"), format!("gate-a{prev}.tap")].iter()
+    let tap = [format!("broke-a{prev}.tap"), format!("after-a{prev}.tap"), format!("gate-a{prev}.tap")].iter()
         .map(|f| rd.join(f)).find(|p| p.exists())
         .and_then(|p| fs::read_to_string(p).ok())
         .map(|s| testrun::failures(&s, 60)).unwrap_or_default();
@@ -297,6 +300,12 @@ fn handle_done(ctx: &mut Ctx, worker: &str, id: &str, n: u8, result: anyhow::Res
     ctx.log("settle", Some(id), serde_json::json!({ "res": res, "reserved": reserved, "cost": cost, "basis": basis_s, "over": cost > reserved + 1e-9 }))?;
     ctx.log("worker_done", Some(id), serde_json::json!({ "worker": worker, "attempt": n, "summary": summary, "error": error }))?;
 
+    if !git::is_clean(&ctx.repo)? {
+        let msg = format!("notary: stray edits from {id}-a{n} ({worker})");
+        git::stash_all(&ctx.repo, &msg)?;
+        ctx.log("isolation_breach", Some(id), serde_json::json!({ "worker": worker, "stash": msg }))?;
+        return fail(ctx, id, n, format!("wrote outside its worktree; the edits were stashed in the main checkout as \"{msg}\""));
+    }
     if let Some(e) = error { return fail(ctx, id, n, e); }
     finish_attempt(ctx, id, n)
 }
@@ -354,7 +363,7 @@ fn recover(ctx: &mut Ctx) -> anyhow::Result<()> {
     let reserved = std::mem::take(&mut ctx.st.ledger.reserved);
     for (res, amount) in &reserved {
         let task = res.split('-').next().unwrap_or(res).to_string();
-        ctx.st.ledger.settle(res, &task, *amount, "estimated");
+        ctx.st.ledger.settle_crashed(res, &task, *amount);
         changed.push(format!("settled {res} at ${amount:.3} (estimated)"));
     }
     git::prune(&ctx.repo)?;
@@ -418,15 +427,20 @@ fn recover(ctx: &mut Ctx) -> anyhow::Result<()> {
 }
 
 fn finalize(ctx: &mut Ctx, started: Instant, out_of_budget: bool) -> anyhow::Result<()> {
-    let max = ctx.cfg.policy.max_attempts as usize;
+    let max = ctx.cfg.policy.max_attempts;
+    let l = &ctx.st.ledger;
+    let run_left = (l.cap_usd - l.spent_usd - l.reserved.values().sum::<f64>()).max(0.0);
+    let cap = l.cap_usd;
     for id in ctx.st.order.clone() {
         let t = &ctx.st.tasks[&id];
         if t.state != TaskState::Pending { continue; }
         let waiting = t.deps.iter().find(|d| dep_ok(&ctx.st, d) != Some(true)).cloned();
-        let reason = if t.attempts.len() >= t.max_attempts(max as u8) { "no attempts left".to_string() }
-            else if out_of_budget { "budget cap reached".to_string() }
+        let task_left = ctx.st.ledger.available_for(&id);
+        let reason = if t.attempts.len() >= t.max_attempts(max) { "no attempts left".to_string() }
             else if let Some(d) = waiting { format!("waiting on {d}, which never merged") }
-            else if ctx.st.ledger.available_for(&id) < PATCH_MIN_USD { "per-task budget ceiling reached".to_string() }
+            else if out_of_budget || run_left < claude_code::MIN_USD {
+                format!("budget cap reached: ${run_left:.3} of ${cap:.2} left, too little to start another attempt") }
+            else if task_left < PATCH_MIN_USD { "per-task budget ceiling reached".to_string() }
             else { "no free slot could take it (retry needs a different worker)".to_string() };
         ctx.set(&id, TaskState::Skipped { reason })?;
     }
