@@ -11,8 +11,8 @@ locked         = ["test/**", "acceptance/**", "scripts/**", "backlog/**", "tests
 context_files  = ["AGENTS.md", "docs/*.md", "src/**/*.js"]
 
 [budget]
-run_cap_usd      = 2.00
-task_ceiling_usd = 0.50
+run_cap_usd      = 5.00
+task_ceiling_usd = 0.60
 
 [policy]
 contradiction     = "ask"     # ask | first
