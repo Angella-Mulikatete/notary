@@ -11,14 +11,22 @@ pub struct Config {
     pub providers: BTreeMap<String, ProviderCfg>,
     pub prices: BTreeMap<String, Price>,
     pub planner: ModelRef,
+    /// Writes shadow tests; defaults to the planner model.
+    #[serde(default)]
+    pub shadow: Option<ModelRef>,
     pub slots: Vec<SlotCfg>,
 }
+
+fn default_acceptance_dir() -> String { "acceptance".into() }
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct RepoCfg {
     pub backlog: String,
     pub test_all: String,
     pub test_task: String,
+    /// Where `test_task` finds `<id>.test.js`; "notary-tests" when shadow tests are on.
+    #[serde(default = "default_acceptance_dir")]
+    pub acceptance_dir: String,
     pub integrity: String,
     pub grade: String,
     pub grade_report: String,

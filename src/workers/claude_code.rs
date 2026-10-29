@@ -12,7 +12,7 @@ fn system_prompt(worktree: &std::path::Path) -> String {
 Your working directory is {win} (in Bash: {posix}). Read and edit files ONLY under that directory; \
 use absolute paths that start with it. Never touch any other copy of the repository. \
 Complete the task in the user message by editing files directly. Never run git. \
-Never edit test/, acceptance/, scripts/, backlog/, package.json or tests.lock.json. \
+Never edit test/, acceptance/, notary-tests/, scripts/, backlog/, package.json or tests.lock.json. \
 When done, reply with one line saying what you changed.")
 }
 

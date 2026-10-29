@@ -68,7 +68,7 @@ pub fn analyze(cfg: &Config, dir: &Path, st: &State) -> anyhow::Result<Vec<Dep>>
     });
     let tickets: Vec<(String, String)> = st.order.iter().map(|id| (id.clone(), st.tasks[id].body.clone())).collect();
     let tests: Vec<(String, String)> = st.order.iter()
-        .filter_map(|id| fs::read_to_string(dir.join("acceptance").join(format!("{id}.test.js"))).ok().map(|s| (id.clone(), s)))
+        .filter_map(|id| fs::read_to_string(dir.join(&cfg.repo.acceptance_dir).join(format!("{id}.test.js"))).ok().map(|s| (id.clone(), s)))
         .collect();
     Ok(mechanical_deps(&routes, &tickets, &tests))
 }

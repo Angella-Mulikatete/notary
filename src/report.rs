@@ -66,10 +66,13 @@ pub fn write(cfg: &Config, st: &State, nd: &Path, discrepancies: &[String]) -> a
         c.rebase_conflicts, c.repairs_ok, c.reverts, c.wasted_attempts)?;
     writeln!(md, "- Run time: {} min {} s", st.elapsed_secs / 60, st.elapsed_secs % 60)?;
     writeln!(md, "- Workers: {}", cfg.slots.iter().map(|s| format!("{}:{}", s.kind, s.model)).collect::<Vec<_>>().join(", "))?;
-    if discrepancies.is_empty() {
-        writeln!(md, "- Grader cross-check: every Merged / AlreadySatisfied task passes `{}`; nothing else does", cfg.repo.grade)?;
-    } else {
+    if cfg.policy.shadow_tests {
+        writeln!(md, "- Tests: the backlog shipped without acceptance tests, so Notary wrote one per ticket (`{}/`) before work started; the grader has no file for these tasks and cannot cross-check them", cfg.repo.acceptance_dir)?;
+    }
+    if !discrepancies.is_empty() {
         for d in discrepancies { writeln!(md, "- **DISCREPANCY** {d}")?; }
+    } else if !cfg.policy.shadow_tests {
+        writeln!(md, "- Grader cross-check: every Merged / AlreadySatisfied task passes `{}`; nothing else does", cfg.repo.grade)?;
     }
 
     writeln!(md, "\n## Tasks\n")?;
@@ -108,7 +111,11 @@ pub fn write(cfg: &Config, st: &State, nd: &Path, discrepancies: &[String]) -> a
     writeln!(md, "```")?;
 
     writeln!(md, "\n## Known limitations\n")?;
-    writeln!(md, "- \"Done\" means the locked acceptance test failed before and passes after, plus the regression suite and lock check. Hidden tests that probe behaviour outside those tests are not checked.")?;
+    if cfg.policy.shadow_tests {
+        writeln!(md, "- \"Done\" means Notary's own test for the ticket (`{}/<id>.test.js`, written by a model from the ticket text and required to fail on the base commit) failed before and passes after, plus the regression suite and lock check. If a model misread a ticket, its test is wrong too, so a Merged task can still fail the organizers' hidden tests.", cfg.repo.acceptance_dir)?;
+    } else {
+        writeln!(md, "- \"Done\" means the locked acceptance test failed before and passes after, plus the regression suite and lock check. Hidden tests that probe behaviour outside those tests are not checked.")?;
+    }
     writeln!(md, "- Claude Code costs are the CLI's own `total_cost_usd` (basis: estimated); on a subscription no money is charged.")?;
     writeln!(md, "- Patch-agent costs are computed from token counts and list prices in notary.toml (basis: computed); on a free tier no money is charged.")?;
     writeln!(md, "- Planner areas and contradictions come from one LLM call and can be wrong; the merge gate is the backstop for contradictions it misses.")?;
@@ -150,7 +157,8 @@ pub fn verify(cfg: &Config, repo: &Path) -> anyhow::Result<()> {
             }
             other => {
                 let after = testrun::task(cfg, &integ, id, &out.join(format!("{id}-after.tap")))?;
-                mark(!after.passed, format!("{id} {}: not claimed, and does not pass at tip", state_name(other)));
+                mark(!after.passed, format!("{id} {}: not claimed, and {} at tip", state_name(other),
+                    if after.passed { "yet its test passes (claim missed, or the test is too weak)" } else { "does not pass" }));
             }
         }
     }

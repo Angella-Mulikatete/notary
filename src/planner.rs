@@ -47,7 +47,7 @@ fn src_outline(dir: &Path) -> String {
     }).collect::<Vec<_>>().join("\n")
 }
 
-fn planner_prompt(dir: &Path, st: &State) -> String {
+fn planner_prompt(dir: &Path, acc: &str, st: &State) -> String {
     let mut p = format!("{RULES}\n\n# Backlog\n");
     for id in &st.order {
         let t = &st.tasks[id];
@@ -55,8 +55,8 @@ fn planner_prompt(dir: &Path, st: &State) -> String {
     }
     p.push_str("\n# Acceptance tests (locked)\n");
     for id in &st.order {
-        let src = fs::read_to_string(dir.join("acceptance").join(format!("{id}.test.js"))).unwrap_or_else(|_| "(missing)".into());
-        p.push_str(&format!("\n--- acceptance/{id}.test.js ---\n{}\n", src.replace("\r\n", "\n")));
+        let src = fs::read_to_string(dir.join(acc).join(format!("{id}.test.js"))).unwrap_or_else(|_| "(missing)".into());
+        p.push_str(&format!("\n--- {acc}/{id}.test.js ---\n{}\n", src.replace("\r\n", "\n")));
     }
     if let Ok(api) = fs::read_to_string(dir.join("docs").join("api.md")) {
         p.push_str(&format!("\n# docs/api.md\n{}\n", api.replace("\r\n", "\n")));
@@ -83,7 +83,7 @@ fn call_planner(cfg: &Config, repo: &Path, st: &mut State) -> anyhow::Result<Opt
         events::log(&nd, "budget_refused", None, serde_json::json!({ "for": "planner" }))?;
         return Ok(None);
     }
-    let user = planner_prompt(&state::integration_dir(repo), st);
+    let user = planner_prompt(&state::integration_dir(repo), &cfg.repo.acceptance_dir, st);
     fs::write(nd.join("planner-prompt.md"), &user)?;
     let mut spent = 0.0;
     let mut basis = crate::state::CostBasis::Computed;

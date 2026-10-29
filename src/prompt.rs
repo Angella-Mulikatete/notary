@@ -6,7 +6,7 @@ const RULES: &str = "\
 You are fixing one ticket in a small Node.js codebase (ES modules, no dependencies).
 Rules:
 - You may edit only files under src/ and docs/.
-- Never touch test/, acceptance/, scripts/, backlog/, package.json or tests.lock.json.
+- Never touch test/, acceptance/, notary-tests/, scripts/, backlog/, package.json or tests.lock.json.
 - Do not add dependencies. Node standard library only.
 - Do not run git.
 - Keep `npm test` (the regression suite) green.";
@@ -40,7 +40,7 @@ pub fn list_files(root: &Path) -> Vec<String> {
     out
 }
 
-fn context(cfg: &Config, worktree: &Path) -> anyhow::Result<String> {
+pub fn context(cfg: &Config, worktree: &Path) -> anyhow::Result<String> {
     let files = list_files(worktree);
     let mut seen = std::collections::BTreeSet::new();
     let mut out = String::new();
@@ -56,7 +56,7 @@ fn context(cfg: &Config, worktree: &Path) -> anyhow::Result<String> {
 }
 
 pub fn task_prompt(cfg: &Config, worktree: &Path, task: &Task, feedback: Option<&str>, for_patch_agent: bool) -> anyhow::Result<String> {
-    let test_file = format!("acceptance/{}.test.js", task.id);
+    let test_file = format!("{}/{}.test.js", cfg.repo.acceptance_dir, task.id);
     let test_src = fs::read_to_string(worktree.join(&test_file)).unwrap_or_else(|_| "(missing)".into());
     let mut p = format!("{RULES}\n\n# Repository\n\n{}\n# Ticket {}: {}\n\n{}\n\n# Acceptance test\n\nThis locked test must pass: {test_file}\n\n```js\n{}\n```\n",
         context(cfg, worktree)?, task.id, task.title, task.body, test_src.replace("\r\n", "\n").trim_end());

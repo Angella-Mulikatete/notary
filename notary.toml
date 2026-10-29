@@ -1,13 +1,16 @@
 [repo]
 backlog        = "backlog/backlog.json"
 test_all       = "npm test"
-test_task      = "node --test --test-reporter=tap acceptance/{id}.test.js"
+# The live backlog shipped without acceptance tests, so `notary shadow` writes one per ticket into notary-tests/.
+# For the practice backlog: test_task = "... acceptance/{id}.test.js", acceptance_dir = "acceptance", shadow_tests = false.
+test_task      = "node --test --test-reporter=tap notary-tests/{id}.test.js"
+acceptance_dir = "notary-tests"
 integrity      = "npm run verify:tests"
 grade          = "npm run grade"
 grade_report   = "grade-report.json"
 routes_file    = "src/api/routes.js"
 writable       = ["src/**", "docs/**"]
-locked         = ["test/**", "acceptance/**", "scripts/**", "backlog/**", "tests.lock.json", "package.json"]
+locked         = ["test/**", "acceptance/**", "notary-tests/**", "scripts/**", "backlog/**", "tests.lock.json", "package.json"]
 context_files  = ["AGENTS.md", "docs/*.md", "src/**/*.js"]
 
 [budget]
@@ -19,7 +22,7 @@ contradiction     = "ask"     # ask | first
 ask_timeout_secs  = 60
 max_attempts      = 2
 fast_forward_main = true
-shadow_tests      = false     # turn on in Phase 3 if time allows
+shadow_tests      = true      # backlog has no acceptance tests; run `notary shadow` after init
 timeout_secs      = 600
 
 [providers.gemini]

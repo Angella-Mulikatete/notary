@@ -463,7 +463,9 @@ fn finalize(ctx: &mut Ctx, started: Instant, out_of_budget: bool) -> anyhow::Res
         let t = &ctx.st.tasks[id];
         let claimed = matches!(t.state, TaskState::Merged | TaskState::AlreadySatisfied { .. });
         let passed = grade["tasks"][id]["passed"].as_bool().unwrap_or(false);
-        if claimed != passed {
+        // a task with no acceptance file in the repo cannot be cross-checked locally (shadow tests)
+        let ungraded = grade["tasks"][id]["missing"].as_bool().unwrap_or(false);
+        if claimed != passed && !ungraded {
             discrepancies.push(format!("{id}: Notary says {} but grader says passed={passed}", short(&t.state)));
         }
     }

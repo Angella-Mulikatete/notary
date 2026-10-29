@@ -61,6 +61,7 @@ EOF
 ## Run (one command)
 
 ```bash
+./target/release/notary shadow --repo /path/to/collision-course-ledger # only if the backlog has no acceptance tests (policy.shadow_tests)
 ./target/release/notary plan --repo /path/to/collision-course-ledger   # optional: decide contradictions first
 ./target/release/notary run  --repo /path/to/collision-course-ledger
 ./target/release/notary verify --repo /path/to/collision-course-ledger
@@ -70,8 +71,7 @@ Watch progress from a second terminal:
 
 ```bash
 watch -n 2 ./target/release/notary status --repo /path/to/collision-course-ledger          # bash
-while ($true) { Clear-Host; .	argetelease
-otary.exe status --repo $R; Start-Sleep 2 }  # PowerShell
+while ($true) { Clear-Host; .\target\release\notary.exe status --repo $R; Start-Sleep 2 }  # PowerShell
 ```
 
 ### Windows notes
@@ -88,6 +88,7 @@ Notary runs natively on Windows (no WSL needed):
 |---|---|
 | `notary init` | Creates `.notary/`, excludes it from git, creates the integration worktree |
 | `notary probe` | Runs every acceptance file on the base commit |
+| `notary shadow` | Backlog without acceptance tests: a model writes `notary-tests/<id>.test.js` per ticket; kept only if it parses, is black-box and fails on the base commit; committed as the new base. Run after `init`, before `plan` |
 | `notary plan` | Probe + analyzer + planner; asks about contradictions; writes `plan.json` |
 | `notary run` | The full pipeline (reuses an existing `plan.json`) |
 | `notary resume` | Continues after a crash or interruption |
