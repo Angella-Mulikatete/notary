@@ -24,11 +24,7 @@ pub fn ensure_init(cfg: &Config, repo: &Path) -> anyhow::Result<State> {
     if sp.exists() {
         return State::load(&sp);
     }
-    anyhow::ensure!(git::is_clean(repo)?, "{} has uncommitted changes; init needs a clean repo", repo.display());
-
-    let nd = state::notary_dir(repo);
-    for d in ["runs", "trees"] { fs::create_dir_all(nd.join(d))?; }
-
+    // excludes go in first, so a grade-report.json left by a baseline `npm run grade` doesn't count as dirty
     let exclude = repo.join(".git").join("info").join("exclude");
     fs::create_dir_all(exclude.parent().unwrap())?;
     let existing = fs::read_to_string(&exclude).unwrap_or_default();
@@ -36,6 +32,12 @@ pub fn ensure_init(cfg: &Config, repo: &Path) -> anyhow::Result<State> {
     for line in EXCLUDES {
         if !existing.lines().any(|l| l.trim() == line) { writeln!(f, "{line}")?; }
     }
+    drop(f);
+
+    anyhow::ensure!(git::is_clean(repo)?, "{} has uncommitted changes; init needs a clean repo", repo.display());
+
+    let nd = state::notary_dir(repo);
+    for d in ["runs", "trees"] { fs::create_dir_all(nd.join(d))?; }
 
     let base_sha = git::head(repo)?;
     git::worktree_add(repo, &state::integration_dir(repo), "notary/integration", &base_sha)?;
