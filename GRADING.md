@@ -1,8 +1,8 @@
 # Collision Course: how Notary was graded
 
-Organizer grading for the Collision Course hackathon (Kolaborate Academy, 23 to 30 October 2026). These scores are a draft until the leaderboard is published on the platform.
+Organizer grading for the Collision Course hackathon (Kolaborate Academy, 23 to 30 October 2026). Results were published on the platform on 30 October 2026.
 
-**Total: 0.701 of 1.000, currently ranked 1 of 3.**
+**Total: 0.701 of 1.000, ranked 1 of 3. Winner.**
 
 | Criterion | Weight | Score |
 |---|---|---|
@@ -79,7 +79,7 @@ This criterion cost the most points.
 | Honesty scored 0 | 0.631 |
 | Rebuild not accepted, so hidden tests score 0 | 0.390 |
 
-Notary stays first in every case except the last one. Whether to accept the rebuild is the organizer's open decision.
+Notary stays first in every case except the last one. The organizer accepted the rebuild.
 
 ## What would have scored higher
 
