@@ -89,4 +89,4 @@ Notary stays first in every case except the last one. The organizer accepted the
 
 The full grading report for all entries is shared separately by the organizers. The hidden acceptance test code stays private.
 
-Grader: Calvin Magezi (organizer), with an AI assistant (Claude) running the grading script and the rebuild. Disclosure: you have taken part in Kolaborate programmes.
+Grader: Calvin Magezi (organizer), with an AI assistant (Claude) running the grading script and the rebuild. Disclosure: you are a member of Kolaborate staff. Staff were permitted to enter, and every entry was graded with the same rubric and script.
