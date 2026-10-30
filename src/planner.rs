@@ -235,6 +235,10 @@ pub fn plan(cfg: &Config, repo: &Path, st: &mut State) -> anyhow::Result<()> {
 
 pub fn plan_cmd(cfg: &Config, repo: &Path) -> anyhow::Result<()> {
     let mut st = probe::ensure_init(cfg, repo)?;
+    if cfg.policy.shadow_tests && !st.planned {
+        crate::shadow::shadow_cmd(cfg, repo, &[])?;
+        st = State::load(&state::state_path(repo))?;
+    }
     if !st.planned { probe::probe(cfg, repo, &mut st, false)?; }
     plan(cfg, repo, &mut st)
 }

@@ -61,6 +61,11 @@ pub fn run(cfg: &Config, repo: &Path, resume: bool) -> anyhow::Result<()> {
         State::load(&sp)?
     } else {
         let mut st = probe::ensure_init(cfg, repo)?;
+        // one command: write any missing shadow tests before planning
+        if cfg.policy.shadow_tests && !st.planned {
+            crate::shadow::shadow_cmd(cfg, repo, &[])?;
+            st = State::load(&sp)?;
+        }
         anyhow::ensure!(st.tasks.values().all(|t| t.attempts.is_empty()),
             "a run already happened here; use `notary resume`, or start from a fresh repo");
         probe::preflight(cfg, repo)?;

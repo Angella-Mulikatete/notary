@@ -61,7 +61,7 @@ EOF
 ## Run (one command)
 
 ```bash
-./target/release/notary shadow --repo /path/to/collision-course-ledger # only if the backlog has no acceptance tests (policy.shadow_tests)
+./target/release/notary shadow --repo /path/to/collision-course-ledger # optional: `run` writes missing shadow tests itself when policy.shadow_tests is on
 ./target/release/notary plan --repo /path/to/collision-course-ledger   # optional: decide contradictions first
 ./target/release/notary run  --repo /path/to/collision-course-ledger
 ./target/release/notary verify --repo /path/to/collision-course-ledger
